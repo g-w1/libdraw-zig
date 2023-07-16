@@ -1,11 +1,13 @@
 const std = @import("std");
 var display: *Display = undefined;
-var _screen: ?*Screen = undefined;
-var screen: ?*Image = undefined;
+var _screen: ?*Screen = null;
+var screen: ?*Image = null;
 pub fn main() !void {
     const ally = std.heap.page_allocator;
-    try initDraw(ally, null, "bruh");
-    std.debug.print("errstr: {s}\n", .{std.os.plan9.errstr()});
+    initDraw(ally, null, "bruh") catch |e| {
+        std.debug.print("errstr: {s}\n", .{std.os.plan9.errstr()});
+        return e;
+    };
 }
 
 pub fn parseIntSkipPreceedingSpaces(comptime T: type, buf: []const u8) !T {
@@ -220,11 +222,11 @@ pub const Display = struct {
             .defaultfont = {},
             .subfont = {},
         };
+        disp.buf = try ally.alloc(u8, bufsz + 5); // +5 for flush message;
         errdefer ally.free(disp.buf);
+        disp.bufp = disp.buf.ptr;
         disp.white = try disp.allocImage(Rectangle.init(0, 0, 1, 1), Chan.GREY1, true, DColor.White);
         disp.black = try disp.allocImage(Rectangle.init(0, 0, 1, 1), Chan.GREY1, true, DColor.Black);
-        disp.buf = try ally.alloc(u8, bufsz + 5); // +5 for flush message;
-        disp.bufp = disp.buf.ptr;
         // disp.error = error;
         disp.windir = try ally.dupe(u8, options.windir);
         errdefer ally.free(disp.windir);
@@ -476,6 +478,7 @@ pub const Display = struct {
             r = r.inset(Borderwidth);
         }
         std.debug.print("about to call _allocWindow", .{});
+        std.debug.print("winp: {*}", .{winp.*.?});
         winp.* = self._allocWindow(winp.*.?, scrp.*.?, r, ref, DColor.White) catch |err| {
             std.debug.print("could not alloc window {}\n", .{err});
             // self.freeScreen(scrp.*.?);
