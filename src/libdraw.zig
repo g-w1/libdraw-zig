@@ -1,16 +1,4 @@
 const std = @import("std");
-pub fn main() !void {
-    const ally = std.heap.page_allocator;
-    const d = initDraw(ally, null, "bruh") catch |e| {
-        std.debug.print("errstr: {s}\n", .{std.os.plan9.errstr()});
-        return e;
-    };
-    const screen = d.getScreen();
-    var buf: [128]u8 = undefined;
-    _ = buf;
-    try screen.draw(screen.r, d.white, null, Point.Zero);
-    try d.flushImage(true);
-}
 
 pub fn parseIntSkipPreceedingSpaces(comptime T: type, buf: []const u8) !T {
     var i: u32 = 0;
