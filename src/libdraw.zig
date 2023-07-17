@@ -1,12 +1,5 @@
 const std = @import("std");
 
-pub fn parseIntSkipPreceedingSpaces(comptime T: type, buf: []const u8) !T {
-    var i: u32 = 0;
-    while (buf[i] == ' ') i += 1;
-    const int = try std.fmt.parseInt(T, buf[i..], 10);
-    return int;
-}
-
 pub const Image = struct {
     display: *Display, // display holding data
     id: u32, // id of system-held Image
@@ -105,6 +98,60 @@ pub const Image = struct {
     pub fn gendrawop(dst: *Image, r: Rectangle, src: ?*Image, p0: Point, mask: ?*Image, p1: Point, op: DrawOp) !void {
         return draw1(dst, r, src, p0, mask, p1, op);
     }
+
+    pub fn doellipse(dst: *Image, cmd: u8, c: Point, xr: u32, yr: u32, thick: u32, src: *Image, sp: Point, alpha: u32, phi: u32, op: DrawOp) !void {
+        try dst.display.setDrawOp(op);
+
+        const a = try dst.display.allocBuf(1 + 4 + 4 + 2 * 4 + 4 + 4 + 4 + 2 * 4 + 2 * 4);
+        a.writeByte(cmd) catch unreachable;
+        a.writeIntLittle(u32, dst.id) catch unreachable;
+        a.writeIntLittle(u32, src.id) catch unreachable;
+        a.writeIntLittle(i32, c.x) catch unreachable;
+        a.writeIntLittle(i32, c.y) catch unreachable;
+        a.writeIntLittle(u32, xr) catch unreachable;
+        a.writeIntLittle(u32, yr) catch unreachable;
+        a.writeIntLittle(u32, thick) catch unreachable;
+        a.writeIntLittle(i32, sp.x) catch unreachable;
+        a.writeIntLittle(i32, sp.y) catch unreachable;
+        a.writeIntLittle(u32, alpha) catch unreachable;
+        a.writeIntLittle(u32, phi) catch unreachable;
+    }
+
+    pub fn ellipse(dst: *Image, c: Point, a: u32, b: u32, thick: u32, src: *Image, sp: Point) !void {
+        try dst.doellipse('e', c, a, b, thick, src, sp, 0, 0, .soverD);
+    }
+
+    pub fn ellipseop(dst: *Image, c: Point, a: u32, b: u32, thick: u32, src: *Image, sp: Point, op: DrawOp) !void {
+        try dst.doellipse('e', c, a, b, thick, src, sp, 0, 0, op);
+    }
+
+    pub fn fillellipse(dst: *Image, c: Point, a: u32, b: u32, src: *Image, sp: Point) !void {
+        try dst.doellipse('E', c, a, b, 0, src, sp, 0, 0, .soverD);
+    }
+
+    pub fn fillellipseop(dst: *Image, c: Point, a: u32, b: u32, src: *Image, sp: Point, op: DrawOp) !void {
+        try dst.doellipse('E', c, a, b, 0, src, sp, 0, 0, op);
+    }
+
+    pub fn arc(dst: *Image, c: Point, a: u32, b: u32, thick: u32, src: *Image, sp: Point, alpha: u32, phi: u32) !void {
+        const al = alpha | 1 << 31;
+        try dst.doellipse('e', c, a, b, thick, src, sp, al, phi, .soverD);
+    }
+
+    pub fn arcop(dst: *Image, c: Point, a: u32, b: u32, thick: u32, src: *Image, sp: Point, alpha: u32, phi: u32, op: DrawOp) !void {
+        const al = alpha | 1 << 31;
+        try dst.doellipse('e', c, a, b, thick, src, sp, al, phi, op);
+    }
+
+    pub fn fillarc(dst: *Image, c: Point, a: u32, b: u32, src: *Image, sp: Point, alpha: u32, phi: u32) !void {
+        const al = alpha | 1 << 31;
+        try dst.doellipse('E', c, a, b, 0, src, sp, al, phi, .soverD);
+    }
+
+    pub fn fillarcop(dst: *Image, c: Point, a: u32, b: u32, src: *Image, sp: *Image, alpha: u32, phi: u32, op: DrawOp) !void {
+        const al = alpha | 1 << 31;
+        try dst.doellipse('E', c, a, b, 0, src, sp, al, phi, op);
+    }
 };
 /// Porter-Duff compositing operators
 const DrawOp = enum(u8) {
@@ -180,6 +227,8 @@ pub const Rectangle = struct {
     pub fn dY(self: Rectangle) i64 {
         return self.max.y - self.min.y;
     }
+    pub const width = dX;
+    pub const height = dY;
     pub fn inset(self: Rectangle, n: i32) Rectangle {
         var r = self;
         r.min.x += n;
@@ -231,7 +280,14 @@ pub const Display = struct {
     screen: ?*Image = null,
     _screen: ?*Screen = null,
     abpos: usize = 0, // for use in the writer
-    pub fn init(ally: std.mem.Allocator, options: struct { devdir: []const u8 = "/dev", windir: []const u8 = "/dev" }) !*Display {
+    pub fn parseIntSkipPreceedingSpaces(comptime T: type, buf: []const u8) !T {
+        var i: u32 = 0;
+        while (buf[i] == ' ') i += 1;
+        const int = try std.fmt.parseInt(T, buf[i..], 10);
+        return int;
+    }
+
+    pub fn open(ally: std.mem.Allocator, options: struct { devdir: []const u8 = "/dev", windir: []const u8 = "/dev" }) !*Display {
         const NINFO = 12 * 12;
         var info: [NINFO + 1]u8 = undefined;
         var buf: [512]u8 = undefined;
@@ -289,7 +345,6 @@ pub const Display = struct {
                 .next = null,
             };
         }
-        // TODO refactor this into a disp.* = .{ ... } expression
         const bufsize_iounit = iounit(datafd);
         const bufsz = if (bufsize_iounit == 0) 8000 else if (disp.bufsize < 512) return error.IounitTooSmall else bufsize_iounit;
         disp.* = .{
@@ -325,7 +380,9 @@ pub const Display = struct {
         errdefer ally.free(disp.buf);
         disp.bufp = disp.buf.ptr;
         disp.white = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, Color.White);
+        errdefer disp.white.free() catch {};
         disp.black = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, Color.Black);
+        errdefer disp.black.free() catch {};
         // disp.error = error;
         disp.windir = try ally.dupe(u8, options.windir);
         errdefer ally.free(disp.windir);
@@ -335,6 +392,17 @@ pub const Display = struct {
         disp.@"opaque" = disp.white;
         disp.transparent = disp.black;
         return disp;
+    }
+    pub fn close(self: *Display) !void {
+        // TODO reset the window's label to the old label
+        self.ally.free(self.devdir);
+        self.ally.free(self.windir);
+        try self.white.free();
+        try self.black.free();
+        self.fd.close();
+        self.ctlfd.close();
+        self.reffd.close();
+        self.ally.destroy(self);
     }
     pub fn allocImage(self: *Display, r: Rectangle, chan: Chan, repl: bool, col: u32) !*Image {
         return self._allocImage(null, r, chan, repl, col, 0, .backup);
@@ -784,7 +852,7 @@ pub fn initDraw(ally: std.mem.Allocator, fontname: ?[]const u8, label: ?[]const 
 }
 pub fn genInitDraw(ally: std.mem.Allocator, devdir: []const u8, fontname: ?[]const u8, label: ?[]const u8, windir: []const u8, ref: Refresh) !*Display {
     var buf: [128]u8 = undefined;
-    var display = try Display.init(ally, .{ .devdir = devdir, .windir = windir });
+    var display = try Display.open(ally, .{ .devdir = devdir, .windir = windir });
     // TODO deal with fonts
     _ = fontname;
     if (label) |l| blk: {

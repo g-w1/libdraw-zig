@@ -1,48 +1,49 @@
 const std = @import("std");
 const ld = @import("../src/libdraw.zig");
+const SQUARELEN = 40;
+const SPACING = 10;
 pub fn main() !void {
     const ally = std.heap.page_allocator;
-    const d = ld.initDraw(ally, null, "rainbow") catch |e| {
+    const d = ld.initDraw(ally, null, "balls") catch |e| {
         std.debug.print("errstr: {s}\n", .{std.os.plan9.errstr()});
         return e;
     };
+    defer d.close() catch {};
     const screen = d.getScreen();
-    const colors = [_]u32{
-        ld.Color.Black,
-        ld.Color.White,
-        ld.Color.Red,
-        ld.Color.Green,
-        ld.Color.Blue,
-        ld.Color.Cyan,
-        ld.Color.Magenta,
-        ld.Color.Yellow,
-        ld.Color.Paleyellow,
-        ld.Color.Darkyellow,
-        ld.Color.Darkgreen,
-        ld.Color.Palegreen,
-        ld.Color.Medgreen,
-        ld.Color.Darkblue,
-        ld.Color.Palebluegreen,
-        ld.Color.Paleblue,
-        ld.Color.Bluegreen,
-        ld.Color.Greygreen,
-        ld.Color.Palegreygreen,
-        ld.Color.Yellowgreen,
-        ld.Color.Medblue,
-        ld.Color.Greyblue,
-        ld.Color.Palegreyblue,
-        ld.Color.Purpleblue,
-    };
-    var images: [colors.len]*ld.Image = undefined;
-    for (colors, 0..) |color, i| {
-        images[i] = try d.allocImage(ld.Rectangle.init(0, 0, 1, 1), ld.Chan.rgb24, true, color);
-        try d.flushImage(true);
+    const width = screen.r.width();
+    const height = screen.r.height();
+    const numsquares_horiz: u32 = @intCast(@divFloor(width, SQUARELEN));
+    const numsquares_vert: u32 = @intCast(@divFloor(height, SQUARELEN) - 3);
+    var squares = try ally.alloc(u32, numsquares_horiz * numsquares_vert);
+    for (squares) |*square| {
+        square.* = 10;
     }
+    const screenr = screen.r;
+    try d.flushImage(true);
+    var ball: ld.Point = .{ .x = @divFloor(screenr.min.x + screenr.max.x, 2), .y = screenr.max.y };
+    var ballv: ld.Point = .{ .x = 1, .y = -1 };
     while (true) {
-        for (images) |image| {
-            try screen.draw(screen.r, image, null, ld.Point.Zero);
-            try d.flushImage(true);
-            _ = std.os.plan9.syscall_bits.syscall1(.SLEEP, 750);
+        try screen.draw(screen.r, d.white, null, ld.Point.Zero);
+        ball.x += ballv.x;
+        ball.y += ballv.y;
+        if (ball.x > screenr.max.x or ball.x < screenr.min.x) {
+            ballv.x *= -1;
         }
+        if (ball.y > screenr.max.y or ball.y < screenr.min.y) {
+            ballv.y *= -1;
+        }
+        var i: u16 = 0;
+        while (i < numsquares_vert) : (i += 1) {
+            var j: u16 = 0;
+            while (j < numsquares_horiz) : (j += 1) {
+                const square = squares[i * numsquares_vert + j];
+                _ = square;
+                var rect = ld.Rectangle.init(screenr.min.x + SQUARELEN * j, screenr.min.y + SQUARELEN * i, screenr.min.x + SQUARELEN * (j + 1) - SPACING, screenr.min.y + SQUARELEN * (i + 1) - SPACING);
+                try screen.draw(rect, d.black, null, ld.Point.Zero);
+            }
+        }
+        try screen.ellipse(ball, 10, 10, 10, d.black, ld.Point.Zero);
+        try d.flushImage(true);
+        _ = std.os.plan9.syscall_bits.syscall1(.SLEEP, 10);
     }
 }
