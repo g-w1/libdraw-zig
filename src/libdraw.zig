@@ -29,8 +29,7 @@ pub const Image = struct {
         var id: u32 = 0;
         var trys: usize = 0;
         while (trys < 25) : (trys += 1) {
-            var bs = try d.bufImage(1 + 4 + 4 + 4 + 1);
-            var a = bs.writer();
+            var a = try d.allocBuf(1 + 4 + 4 + 4 + 1);
             screenid += 1;
             id = screenid & 0xffff; // old devdraw bug
             a.writeByte('A') catch unreachable;
@@ -56,8 +55,7 @@ pub const Image = struct {
     pub fn lineop(dst: *Image, p0: Point, p1: Point, end0: u32, end1: u32, radius: u32, src: *Image, sp: Point, op: DrawOp) !void {
         const d = dst.display;
         try d.setDrawOp(op);
-        var bs = try d.bufImage(1 + 4 + 2 * 4 + 2 * 4 + 4 + 4 + 4 + 4 + 2 * 4);
-        var a = bs.writer();
+        var a = try d.allocBuf(1 + 4 + 2 * 4 + 2 * 4 + 4 + 4 + 4 + 4 + 2 * 4);
         a.writeByte('L') catch unreachable;
         a.writeIntLittle(u32, dst.id) catch unreachable;
         a.writeIntLittle(u32, p0.x) catch unreachable;
@@ -75,8 +73,7 @@ pub const Image = struct {
         const d = dst.display;
         try d.setDrawOp(op);
 
-        var bs = try d.bufImage(1 + 4 + 4 + 4 + 4 * 4 + 2 * 4 + 2 * 4);
-        var a = bs.writer();
+        var a = try d.allocBuf(1 + 4 + 4 + 4 + 4 * 4 + 2 * 4 + 2 * 4);
         const s = src orelse d.black;
         const m = mask orelse d.@"opaque";
         a.writeByte('d') catch unreachable;
@@ -233,6 +230,7 @@ pub const Display = struct {
     _isnewdisplay: bool,
     screen: ?*Image = null,
     _screen: ?*Screen = null,
+    abpos: usize = 0, // for use in the writer
     pub fn init(ally: std.mem.Allocator, options: struct { devdir: []const u8 = "/dev", windir: []const u8 = "/dev" }) !*Display {
         const NINFO = 12 * 12;
         var info: [NINFO + 1]u8 = undefined;
@@ -352,8 +350,7 @@ pub const Display = struct {
         if (depth == 0) {
             return error.BadChanDesc;
         }
-        var bs = try self.bufImage(1 + 4 + 4 + 1 + 4 + 1 + 4 * 4 + 4 * 4 + 4);
-        var a = bs.writer();
+        var a = try self.allocBuf(1 + 4 + 4 + 1 + 4 + 1 + 4 * 4 + 4 * 4 + 4);
         self.imageid += 1;
         const id = self.imageid;
         // start writing the protocol
@@ -395,8 +392,7 @@ pub const Display = struct {
             return error.ImageNameTooLong;
         }
         self.flushImage(false) catch {};
-        var bs = try self.bufImage(1 + 4 + 1 + name.len);
-        var a = bs.writer();
+        var a = try self.allocBuf(1 + 4 + 1 + name.len);
         self.imageid += 1;
         const id = self.imageid;
         a.writeByte('n') catch unreachable;
@@ -455,8 +451,7 @@ pub const Display = struct {
         return im;
     }
     fn freeRemote(self: *Display, id: u32, t: enum { image, screen }) !void {
-        var bs = try self.bufImage(1 + 4);
-        const a = bs.writer();
+        var a = try self.allocBuf(1 + 4);
         const c: u8 = if (t == .image) 'f' else 'F';
         a.writeByte(c) catch unreachable;
         a.writeIntLittle(u32, id) catch unreachable;
@@ -479,7 +474,30 @@ pub const Display = struct {
         }
         try d.freeRemote(image.id, .image);
     }
-    pub fn bufImage(self: *Display, n: usize) !std.io.FixedBufferStream([]u8) {
+    const AllocedBuf = struct {
+        buffer: []u8,
+        pos: *usize,
+        fn writer(self: AllocedBuf) std.io.Writer(AllocedBuf, error{}, write) {
+            return .{ .context = self };
+        }
+        fn write(self: AllocedBuf, bytes: []const u8) error{}!usize {
+            if (bytes.len == 0) return 0;
+            if (self.pos.* >= self.buffer.len) unreachable; // we don't allocate more than we use
+
+            const n = if (self.pos.* + bytes.len <= self.buffer.len)
+                bytes.len
+            else
+                self.buffer.len - self.pos.*;
+
+            @memcpy(self.buffer[self.pos.*..][0..n], bytes[0..n]);
+            self.pos.* += n;
+
+            if (n == 0) unreachable;
+
+            return n;
+        }
+    };
+    pub fn allocBuf(self: *Display, n: usize) !std.io.Writer(AllocedBuf, error{}, AllocedBuf.write) {
         if (n > self.bufsize) {
             return error.BadCountBufSize;
         }
@@ -488,7 +506,9 @@ pub const Display = struct {
         }
         const p = self.bufp;
         self.bufp += n;
-        return std.io.fixedBufferStream(p[0..n]);
+        self.abpos = 0;
+        var ab = AllocedBuf{ .buffer = p[0..n], .pos = &self.abpos };
+        return ab.writer();
     }
     pub fn flush(self: *Display) !void {
         const n: i64 = @intCast(@intFromPtr(self.bufp) - @intFromPtr(self.buf.ptr));
@@ -582,8 +602,7 @@ pub const Display = struct {
     }
     pub fn setDrawOp(self: *Display, op: DrawOp) !void {
         if (op != .soverD) {
-            var bs = try self.bufImage(1 + 1);
-            var a = bs.writer();
+            var a = try self.allocBuf(1 + 1);
             a.writeByte('O') catch unreachable;
             a.writeByte(@intFromEnum(op)) catch unreachable;
         }
