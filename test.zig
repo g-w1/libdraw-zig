@@ -1,13 +1,15 @@
 const std = @import("std");
-var display: *Display = undefined;
-var _screen: ?*Screen = null;
-var screen: ?*Image = null;
 pub fn main() !void {
     const ally = std.heap.page_allocator;
-    initDraw(ally, null, "bruh") catch |e| {
+    const d = initDraw(ally, null, "bruh") catch |e| {
         std.debug.print("errstr: {s}\n", .{std.os.plan9.errstr()});
         return e;
     };
+    const screen = d.getScreen();
+    var buf: [128]u8 = undefined;
+    _ = buf;
+    try screen.draw(screen.r, d.white, null, Point.Zero);
+    try d.flushImage(true);
 }
 
 pub fn parseIntSkipPreceedingSpaces(comptime T: type, buf: []const u8) !T {
@@ -56,11 +58,116 @@ pub const Image = struct {
         s.fill = fill;
         return s;
     }
+    pub fn free(self: *Image) !void {
+        try Display.freeImage1(self);
+        self.display.ally.destroy(self);
+    }
+    pub fn line(dest: *Image, p0: Point, p1: Point, end0: u32, end1: u32, radius: u32, src: *Image, sp: Point) !void {
+        return dest.lineop(p0, p1, end0, end1, radius, src, sp, DrawOp.SoverD);
+    }
+    pub fn lineop(dst: *Image, p0: Point, p1: Point, end0: u32, end1: u32, radius: u32, src: *Image, sp: Point, op: DrawOp) !void {
+        const d = dst.display;
+        try d.setDrawOp(op);
+        var bs = try d.bufImage(1 + 4 + 2 * 4 + 2 * 4 + 4 + 4 + 4 + 4 + 2 * 4);
+        var a = bs.writer();
+        a.writeByte('L') catch unreachable;
+        a.writeIntLittle(u32, dst.id) catch unreachable;
+        a.writeIntLittle(u32, p0.x) catch unreachable;
+        a.writeIntLittle(u32, p0.y) catch unreachable;
+        a.writeIntLittle(u32, p1.x) catch unreachable;
+        a.writeIntLittle(u32, p1.y) catch unreachable;
+        a.writeIntLittle(u32, end0) catch unreachable;
+        a.writeIntLittle(u32, end1) catch unreachable;
+        a.writeIntLittle(u32, radius) catch unreachable;
+        a.writeIntLittle(u32, src.id) catch unreachable;
+        a.writeIntLittle(u32, sp.x) catch unreachable;
+        a.writeIntLittle(u32, sp.y) catch unreachable;
+    }
+    pub fn draw1(dst: *Image, r: Rectangle, src: ?*Image, p0: Point, mask: ?*Image, p1: Point, op: DrawOp) !void {
+        const d = dst.display;
+        try d.setDrawOp(op);
+
+        var bs = try d.bufImage(1 + 4 + 4 + 4 + 4 * 4 + 2 * 4 + 2 * 4);
+        var a = bs.writer();
+        const s = src orelse d.black;
+        const m = mask orelse d.@"opaque";
+        a.writeByte('d') catch unreachable;
+        a.writeIntLittle(u32, dst.id) catch unreachable;
+        a.writeIntLittle(u32, s.id) catch unreachable;
+        a.writeIntLittle(u32, m.id) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(r.min.x))) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(r.min.y))) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(r.max.x))) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(r.max.y))) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(p0.x))) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(p0.y))) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(p1.x))) catch unreachable;
+        a.writeIntLittle(u32, @as(u32, @bitCast(p1.y))) catch unreachable;
+    }
+
+    pub fn draw(dst: *Image, r: Rectangle, src: *Image, mask: ?*Image, p1: Point) !void {
+        return draw1(dst, r, src, p1, mask, p1, .soverD);
+    }
+
+    pub fn drawop(dst: *Image, r: Rectangle, src: ?*Image, mask: ?*Image, p1: Point, op: DrawOp) !void {
+        return draw1(dst, r, src, p1, mask, p1, op);
+    }
+
+    pub fn gendraw(dst: *Image, r: Rectangle, src: ?*Image, p0: Point, mask: ?*Image, p1: Point) !void {
+        return draw1(dst, r, src, p0, mask, p1, .soverD);
+    }
+
+    pub fn gendrawop(dst: *Image, r: Rectangle, src: ?*Image, p0: Point, mask: ?*Image, p1: Point, op: DrawOp) !void {
+        return draw1(dst, r, src, p0, mask, p1, op);
+    }
+};
+/// Porter-Duff compositing operators
+const DrawOp = enum(u8) {
+    pub const Clear = 0;
+
+    pub const SinD = 8;
+    pub const DinS = 4;
+    pub const SoutD = 2;
+    pub const DoutS = 1;
+
+    pub const S = SinD | SoutD;
+    pub const SoverD = SinD | SoutD | DoutS;
+    pub const SatopD = SinD | DoutS;
+    pub const SxorD = SoutD | DoutS;
+
+    pub const D = DinS | DoutS;
+    pub const DoverS = DinS | DoutS | SoutD;
+    pub const DatopS = DinS | SoutD;
+    pub const DxorS = DoutS | SoutD; // == SxorD
+
+    pub const Ncomp = 12;
+
+    sinD = SinD,
+    dinS = DinS,
+    soutD = SoutD,
+    doutS = DoutS,
+
+    s = S,
+    soverD = SoverD,
+    satopD = SatopD,
+    sxorD = SxorD,
+
+    d = D,
+    doverS = DoverS,
+    datopS = DatopS,
+    // dxorS = DxorS, // == SxorD TODO have multiple enum vals with the same name
+
 };
 var screenid: u32 = 0;
+pub const Point = struct {
+    x: i32,
+    y: i32,
+    pub const Zero: Point = .{ .x = 0, .y = 0 };
+};
 pub const Rectangle = struct {
     min: Point,
     max: Point,
+    pub const Zero: Rectangle = .{ .min = Point.Zero, .max = Point.Zero };
     pub fn init(min_x: i32, min_y: i32, max_x: i32, max_y: i32) Rectangle {
         return .{
             .min = .{
@@ -102,8 +209,12 @@ pub const Screen = struct {
     id: u32, // id of system-held Screen
     image: *Image, // unused; for reference only
     fill: *Image, // color to paint behind windows
+    fn free(self: *Screen) !void {
+        const d = self.display;
+        try d.freeRemote(self.id, .screen);
+        d.ally.destroy(self);
+    }
 };
-pub const Point = struct { x: i32, y: i32 };
 pub const Display = struct {
     ally: std.mem.Allocator,
     qlock: void, // some sort of mutex???
@@ -132,6 +243,8 @@ pub const Display = struct {
     windows: ?*Image,
     screenimage: ?*Image,
     _isnewdisplay: bool,
+    screen: ?*Image = null,
+    _screen: ?*Screen = null,
     pub fn init(ally: std.mem.Allocator, options: struct { devdir: []const u8 = "/dev", windir: []const u8 = "/dev" }) !*Display {
         const NINFO = 12 * 12;
         var info: [NINFO + 1]u8 = undefined;
@@ -164,7 +277,7 @@ pub const Display = struct {
                 .display = disp,
                 .id = 0,
                 .chan = chan,
-                .depth = chan.getDepth(),
+                .depth = chan.depth(),
                 .repl = try parseIntSkipPreceedingSpaces(u32, infoslice[3 * 12 .. 4 * 12 - 1]) != 0,
                 .r = .{
                     .min = .{
@@ -225,8 +338,8 @@ pub const Display = struct {
         disp.buf = try ally.alloc(u8, bufsz + 5); // +5 for flush message;
         errdefer ally.free(disp.buf);
         disp.bufp = disp.buf.ptr;
-        disp.white = try disp.allocImage(Rectangle.init(0, 0, 1, 1), Chan.GREY1, true, DColor.White);
-        disp.black = try disp.allocImage(Rectangle.init(0, 0, 1, 1), Chan.GREY1, true, DColor.Black);
+        disp.white = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, DColor.White);
+        disp.black = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, DColor.Black);
         // disp.error = error;
         disp.windir = try ally.dupe(u8, options.windir);
         errdefer ally.free(disp.windir);
@@ -247,7 +360,7 @@ pub const Display = struct {
         if (@intFromEnum(chan) == 0) {
             return error.BadChanDesc;
         }
-        const depth = chan.getDepth();
+        const depth = chan.depth();
         if (depth == 0) {
             return error.BadChanDesc;
         }
@@ -319,7 +432,7 @@ pub const Display = struct {
             .display = self,
             .id = id,
             .chan = chan,
-            .depth = chan.getDepth(),
+            .depth = chan.depth(),
             .repl = try parseIntSkipPreceedingSpaces(u32, buf[3 * 12 .. 4 * 12 - 1]) != 0,
             .r = .{
                 .min = .{
@@ -346,7 +459,7 @@ pub const Display = struct {
         };
         return i;
     }
-    fn _allocWindow(self: *Display, i: *Image, s: *Screen, r: Rectangle, ref: Refresh, col: u32) !*Image {
+    fn _allocWindow(self: *Display, i: ?*Image, s: *Screen, r: Rectangle, ref: Refresh, col: u32) !*Image {
         var im = try self._allocImage(i, r, self.screenimage.?.chan, false, col, s.id, ref);
         im.screen = s;
         im.next = self.windows;
@@ -360,20 +473,16 @@ pub const Display = struct {
         a.writeByte(c) catch unreachable;
         a.writeIntLittle(u32, id) catch unreachable;
     }
-    fn freeImage1(i: ?*Image) !void {
-        if (i == null) {
-            return;
-        }
-        const image = i.?;
+    fn freeImage1(image: *Image) !void {
         const d = image.display;
         if (image.screen != null) {
             var w: ?*Image = d.windows;
-            if (w.? == i) {
+            if (w.? == image) {
                 d.windows = image.next;
             } else {
                 while (w != null) {
-                    if (w.?.next == i) {
-                        w.?.next = i.?.next;
+                    if (w.?.next == image) {
+                        w.?.next = image.next;
                         break;
                     }
                     w = w.?.next;
@@ -381,11 +490,6 @@ pub const Display = struct {
             }
         }
         try d.freeRemote(image.id, .image);
-    }
-    fn freeImage(i: ?*Image) !void {
-        _ = i;
-        // try freeImage1(i);
-        // if (i != null) i.?.display.ally.destroy(i.?);
     }
     pub fn bufImage(self: *Display, n: usize) !std.io.FixedBufferStream([]u8) {
         if (n > self.bufsize) {
@@ -401,7 +505,7 @@ pub const Display = struct {
     pub fn flush(self: *Display) !void {
         const n: i64 = @intCast(@intFromPtr(self.bufp) - @intFromPtr(self.buf.ptr));
         if (n <= 0) return error.UnableToFlushInvalidN;
-        std.debug.print("about to flush: {}\n{s}\n", .{ std.fmt.fmtSliceHexLower(self.buf[0..@intCast(n)]), self.buf[0..@intCast(n)] });
+        // std.debug.print("about to flush: {}\n{s}\n", .{ std.fmt.fmtSliceHexLower(self.buf[0..@intCast(n)]), self.buf[0..@intCast(n)] });
         if ((self.fd.write(self.buf[0..@intCast(n)]) catch return error.UnableToFlushWrite) != n) {
             self.bufp = self.buf.ptr; // might as well; chance of continuing
             return error.UnableToFlushN;
@@ -451,11 +555,10 @@ pub const Display = struct {
             break;
         }
         if (winp.*) |i| {
-            _ = i;
-            // try freeImage1(i);
-            // if (scrp.*.?.image != self.image)
-            // try freeImage(scrp.*.?.image);
-            // self.freeScreen(scrp.*.?);
+            try freeImage1(i);
+            if (scrp.*.?.image != self.image)
+                try scrp.*.?.image.free();
+            try scrp.*.?.free();
             scrp.* = null;
         }
         if (image == null) {
@@ -468,7 +571,7 @@ pub const Display = struct {
             winp.* = null;
             self.screenimage = null;
             if (image != self.image) {
-                try freeImage(image);
+                if (image) |i| try i.free();
             }
             return err;
         };
@@ -477,18 +580,29 @@ pub const Display = struct {
         if (!std.mem.eql(u8, buf[0..8], "noborder")) {
             r = r.inset(Borderwidth);
         }
-        std.debug.print("about to call _allocWindow", .{});
-        std.debug.print("winp: {*}", .{winp.*.?});
-        winp.* = self._allocWindow(winp.*.?, scrp.*.?, r, ref, DColor.White) catch |err| {
+        winp.* = self._allocWindow(winp.*, scrp.*.?, r, ref, DColor.White) catch |err| {
             std.debug.print("could not alloc window {}\n", .{err});
-            // self.freeScreen(scrp.*.?);
+            try scrp.*.?.free();
             scrp.* = null;
             self.screenimage = null;
             if (image != self.image)
-                try freeImage(image);
+                if (image) |im|
+                    try im.free();
             return err;
         };
         self.screenimage = winp.*;
+    }
+    pub fn setDrawOp(self: *Display, op: DrawOp) !void {
+        if (op != .soverD) {
+            var bs = try self.bufImage(1 + 1);
+            var a = bs.writer();
+            a.writeByte('O') catch unreachable;
+            a.writeByte(@intFromEnum(op)) catch unreachable;
+        }
+    }
+    // asserts self.screen != null
+    pub fn getScreen(self: Display) *Image {
+        return self.screen.?;
     }
 };
 fn iounit(file: std.fs.File) u32 {
@@ -518,55 +632,81 @@ pub const Chan = enum(u32) {
         const Ignore = 6;
     };
     pub const NChan = 7;
-    GREY1 = chan1(Color.Grey, 1),
-    GREY2 = chan1(Color.Grey, 2),
-    GREY4 = chan1(Color.Grey, 4),
-    GREY8 = chan1(Color.Grey, 8),
-    CMAP8 = chan1(Color.Map, 8),
-    RGB15 = chan4(Color.Ignore, 1, Color.Red, 5, Color.Green, 5, Color.Blue, 5),
-    RGB16 = chan3(Color.Red, 5, Color.Green, 6, Color.Blue, 5),
-    RGB24 = chan3(Color.Red, 8, Color.Green, 8, Color.Blue, 8),
-    RGBA32 = chan4(Color.Red, 8, Color.Green, 8, Color.Blue, 8, Color.Alpha, 8),
-    ARGB32 = chan4(Color.Alpha, 8, Color.Red, 8, Color.Green, 8, Color.Blue, 8),
-    XRGB32 = chan4(Color.Ignore, 8, Color.Red, 8, Color.Green, 8, Color.Blue, 8),
-    BGR24 = chan3(Color.Blue, 8, Color.Green, 8, Color.Red, 8),
-    ABGR32 = chan4(Color.Alpha, 8, Color.Blue, 8, Color.Green, 8, Color.Red, 8),
-    XBGR32 = chan4(Color.Ignore, 8, Color.Blue, 8, Color.Green, 8, Color.Red, 8),
+    grey1 = chan1(Color.Grey, 1),
+    grey2 = chan1(Color.Grey, 2),
+    grey4 = chan1(Color.Grey, 4),
+    grey8 = chan1(Color.Grey, 8),
+    cmap8 = chan1(Color.Map, 8),
+    rgb15 = chan4(Color.Ignore, 1, Color.Red, 5, Color.Green, 5, Color.Blue, 5),
+    rgb16 = chan3(Color.Red, 5, Color.Green, 6, Color.Blue, 5),
+    rgb24 = chan3(Color.Red, 8, Color.Green, 8, Color.Blue, 8),
+    rgba32 = chan4(Color.Red, 8, Color.Green, 8, Color.Blue, 8, Color.Alpha, 8),
+    argb32 = chan4(Color.Alpha, 8, Color.Red, 8, Color.Green, 8, Color.Blue, 8),
+    xrgb32 = chan4(Color.Ignore, 8, Color.Red, 8, Color.Green, 8, Color.Blue, 8),
+    bgr24 = chan3(Color.Blue, 8, Color.Green, 8, Color.Red, 8),
+    abgr32 = chan4(Color.Alpha, 8, Color.Blue, 8, Color.Green, 8, Color.Red, 8),
+    xbgr32 = chan4(Color.Ignore, 8, Color.Blue, 8, Color.Green, 8, Color.Red, 8),
     _,
     const channames: []const u8 = "rgbkamx";
+    fn TYPE(self: u32) u32 {
+        return (self >> 4) & 15;
+    }
+    fn NBITS(self: u32) u32 {
+        return self & 15;
+    }
     pub fn fromString(str: []const u8) Chan {
         // strip str
         const spaces: []const u8 = &.{ ' ', '\t', '\r', '\n' };
         const pos = std.mem.indexOfNone(u8, str, spaces).?;
         const s = str[pos..];
 
-        var depth: u32 = 0;
+        var d: u32 = 0;
         var chan: u32 = 0;
         var i: usize = 0;
         const chan_ = blk: {
             while (i < s.len) : (i += 2) {
                 if (std.ascii.isWhitespace(s[i])) break;
-                if (std.mem.indexOfScalar(u8, channames, s[0])) |ty| {
+                if (std.mem.indexOfScalar(u8, channames, s[i])) |ty| {
                     const n = std.fmt.parseInt(u8, s[i + 1 .. i + 2], 10) catch break :blk 0;
-                    depth += n;
+                    d += n;
                     chan <<= 8;
                     chan |= dc(@intCast(ty), @intCast(n));
                 } else break :blk 0;
             }
-            if (depth == 0 or (depth > 8 and depth % 8 != 0) or (depth < 8 and 8 % depth != 0)) break :blk 0;
+            if (d == 0 or (d > 8 and d % 8 != 0) or (d < 8 and 8 % d != 0)) break :blk 0;
             break :blk chan;
         };
 
         return @enumFromInt(chan_);
     }
-    pub fn getDepth(self: Chan) u32 {
-        var depth: u32 = 0;
+    pub fn toString(self: Chan, buf: []u8) ![]const u8 {
+        if (self.depth() == 0) {
+            return error.ChanDepthIsZero;
+        }
+        var rc: u32 = 0;
+        var c = @intFromEnum(self);
+        while (c != 0) : (c >>= 8) {
+            rc <<= 8;
+            rc |= c & 0xff;
+        }
+        var i: usize = 0;
+        c = rc;
+        while (c != 0) : (c >>= 8) {
+            buf[i] = channames[TYPE(c)];
+            i += 1;
+            buf[i] = @intCast('0' + NBITS(c));
+            i += 1;
+        }
+        return buf[0..i];
+    }
+    pub fn depth(self: Chan) u32 {
+        var d: u32 = 0;
         var c: u32 = @intFromEnum(self);
         while (c != 0) : (c >>= 8) {
-            depth += cdepth(c);
+            d += cdepth(c);
         }
-        if (depth == 0 or (depth > 8 and depth % 8 != 0) or (depth < 8 and 8 % depth != 0)) return 0;
-        return depth;
+        if (d == 0 or (d > 8 and d % 8 != 0) or (d < 8 and 8 % d != 0)) return 0;
+        return d;
     }
     fn dc(ty: u32, nbit: u32) u32 {
         return ((ty & 15) << 4) | (nbit & 15);
@@ -625,7 +765,7 @@ pub const Refresh = enum(u8) {
     none = 1,
     mesg = 2,
 };
-pub fn initDraw(ally: std.mem.Allocator, fontname: ?[]const u8, label: ?[]const u8) !void { // TODO we are skipping the error function. I think this is okay since we do errors different in zig
+pub fn initDraw(ally: std.mem.Allocator, fontname: ?[]const u8, label: ?[]const u8) !*Display {
     return genInitDraw(
         ally,
         "/dev",
@@ -635,9 +775,9 @@ pub fn initDraw(ally: std.mem.Allocator, fontname: ?[]const u8, label: ?[]const 
         .none,
     );
 }
-pub fn genInitDraw(ally: std.mem.Allocator, devdir: []const u8, fontname: ?[]const u8, label: ?[]const u8, windir: []const u8, ref: Refresh) !void {
+pub fn genInitDraw(ally: std.mem.Allocator, devdir: []const u8, fontname: ?[]const u8, label: ?[]const u8, windir: []const u8, ref: Refresh) !*Display {
     var buf: [128]u8 = undefined;
-    display = try Display.init(ally, .{ .devdir = devdir, .windir = windir });
+    var display = try Display.init(ally, .{ .devdir = devdir, .windir = windir });
     // TODO deal with fonts
     _ = fontname;
     if (label) |l| blk: {
@@ -647,5 +787,6 @@ pub fn genInitDraw(ally: std.mem.Allocator, devdir: []const u8, fontname: ?[]con
         _ = try labelfd.write(l);
     }
     const winnamefds = std.fmt.bufPrint(&buf, "{s}/winname", .{display.windir}) catch unreachable;
-    try display.genGetWindow(winnamefds, &screen, &_screen, ref);
+    try display.genGetWindow(winnamefds, &display.screen, &display._screen, ref);
+    return display;
 }
