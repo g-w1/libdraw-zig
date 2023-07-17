@@ -326,8 +326,8 @@ pub const Display = struct {
         disp.buf = try ally.alloc(u8, bufsz + 5); // +5 for flush message;
         errdefer ally.free(disp.buf);
         disp.bufp = disp.buf.ptr;
-        disp.white = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, DColor.White);
-        disp.black = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, DColor.Black);
+        disp.white = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, Color.White);
+        disp.black = try disp.allocImage(Rectangle.init(0, 0, 1, 1), .grey1, true, Color.Black);
         // disp.error = error;
         disp.windir = try ally.dupe(u8, options.windir);
         errdefer ally.free(disp.windir);
@@ -368,7 +368,7 @@ pub const Display = struct {
         a.writeIntLittle(i32, r.min.y) catch unreachable;
         a.writeIntLittle(i32, r.max.x) catch unreachable;
         a.writeIntLittle(i32, r.max.y) catch unreachable;
-        const clipr = if (!repl)
+        const clipr = if (repl)
             Rectangle.init(-0x3FFFFFFF, -0x3FFFFFFF, 0x3FFFFFFF, 0x3FFFFFFF)
         else
             r;
@@ -568,7 +568,7 @@ pub const Display = struct {
         if (!std.mem.eql(u8, buf[0..8], "noborder")) {
             r = r.inset(Borderwidth);
         }
-        winp.* = self._allocWindow(winp.*, scrp.*.?, r, ref, DColor.White) catch |err| {
+        winp.* = self._allocWindow(winp.*, scrp.*.?, r, ref, Color.White) catch |err| {
             std.debug.print("could not alloc window {}\n", .{err});
             try scrp.*.?.free();
             scrp.* = null;
@@ -610,7 +610,7 @@ fn iounit(file: std.fs.File) u32 {
     return std.fmt.parseInt(u32, iounit_str, 10) catch return 0;
 }
 pub const Chan = enum(u32) {
-    pub const Color = struct {
+    const CColor = struct {
         const Red = 0;
         const Green = 1;
         const Blue = 2;
@@ -620,20 +620,20 @@ pub const Chan = enum(u32) {
         const Ignore = 6;
     };
     pub const NChan = 7;
-    grey1 = chan1(Color.Grey, 1),
-    grey2 = chan1(Color.Grey, 2),
-    grey4 = chan1(Color.Grey, 4),
-    grey8 = chan1(Color.Grey, 8),
-    cmap8 = chan1(Color.Map, 8),
-    rgb15 = chan4(Color.Ignore, 1, Color.Red, 5, Color.Green, 5, Color.Blue, 5),
-    rgb16 = chan3(Color.Red, 5, Color.Green, 6, Color.Blue, 5),
-    rgb24 = chan3(Color.Red, 8, Color.Green, 8, Color.Blue, 8),
-    rgba32 = chan4(Color.Red, 8, Color.Green, 8, Color.Blue, 8, Color.Alpha, 8),
-    argb32 = chan4(Color.Alpha, 8, Color.Red, 8, Color.Green, 8, Color.Blue, 8),
-    xrgb32 = chan4(Color.Ignore, 8, Color.Red, 8, Color.Green, 8, Color.Blue, 8),
-    bgr24 = chan3(Color.Blue, 8, Color.Green, 8, Color.Red, 8),
-    abgr32 = chan4(Color.Alpha, 8, Color.Blue, 8, Color.Green, 8, Color.Red, 8),
-    xbgr32 = chan4(Color.Ignore, 8, Color.Blue, 8, Color.Green, 8, Color.Red, 8),
+    grey1 = chan1(CColor.Grey, 1),
+    grey2 = chan1(CColor.Grey, 2),
+    grey4 = chan1(CColor.Grey, 4),
+    grey8 = chan1(CColor.Grey, 8),
+    cmap8 = chan1(CColor.Map, 8),
+    rgb15 = chan4(CColor.Ignore, 1, CColor.Red, 5, CColor.Green, 5, CColor.Blue, 5),
+    rgb16 = chan3(CColor.Red, 5, CColor.Green, 6, CColor.Blue, 5),
+    rgb24 = chan3(CColor.Red, 8, CColor.Green, 8, CColor.Blue, 8),
+    rgba32 = chan4(CColor.Red, 8, CColor.Green, 8, CColor.Blue, 8, CColor.Alpha, 8),
+    argb32 = chan4(CColor.Alpha, 8, CColor.Red, 8, CColor.Green, 8, CColor.Blue, 8),
+    xrgb32 = chan4(CColor.Ignore, 8, CColor.Red, 8, CColor.Green, 8, CColor.Blue, 8),
+    bgr24 = chan3(CColor.Blue, 8, CColor.Green, 8, CColor.Red, 8),
+    abgr32 = chan4(CColor.Alpha, 8, CColor.Blue, 8, CColor.Green, 8, CColor.Red, 8),
+    xbgr32 = chan4(CColor.Ignore, 8, CColor.Blue, 8, CColor.Green, 8, CColor.Red, 8),
     _,
     const channames: []const u8 = "rgbkamx";
     fn TYPE(self: u32) u32 {
@@ -715,7 +715,7 @@ pub const Chan = enum(u32) {
         return chan3(a, b, c, d, e, f) << 8 | dc(g, h);
     }
 };
-pub const DColor = struct {
+pub const Color = struct {
     pub const Opaque = 0xFFFFFFFF;
     pub const Transparent = 0x00000000; // only useful for allocimage, memfillcolor
     pub const Black = 0x000000FF;
