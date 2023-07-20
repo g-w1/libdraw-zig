@@ -221,10 +221,10 @@ pub const Rectangle = struct {
         }
         return true;
     }
-    pub fn dX(self: Rectangle) i64 {
+    pub fn dX(self: Rectangle) i32 {
         return self.max.x - self.min.x;
     }
-    pub fn dY(self: Rectangle) i64 {
+    pub fn dY(self: Rectangle) i32 {
         return self.max.y - self.min.y;
     }
     pub const width = dX;
