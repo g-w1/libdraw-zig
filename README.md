@@ -7,4 +7,5 @@ It reimplements the protocol, using the [C implementation](http://git.9front.org
 I tried to make this idomatic Zig, and once the x86_64 Zig backend progresses enough, I'll continue working on this.
 
 Here's a demo:
-![demo](./demo.mp4)
+
+https://github.com/g-w1/libdraw-zig/assets/58830309/69a16abb-d316-44f0-8b02-d5bb1b1fc0a8
